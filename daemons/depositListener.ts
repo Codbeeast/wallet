@@ -14,8 +14,8 @@ const cyan = '\x1b[36m';
 const reset = '\x1b[0m';
 
 const NILE_RPC = process.env.NILE_RPC_URL || 'https://api.nileex.io';
-const WARM_WALLET = process.env.WARM_WALLET_ADDRESS;
-const USDT_CONTRACT = process.env.USDT_CONTRACT_ADDRESS;
+const WARM_WALLET = process.env.WARM_WALLET_ADDRESS as string;
+const USDT_CONTRACT = process.env.USDT_CONTRACT_ADDRESS as string;
 
 if (!WARM_WALLET || !USDT_CONTRACT) {
   console.error('\x1b[31m[DAEMON] [ERROR] WARM_WALLET_ADDRESS and USDT_CONTRACT_ADDRESS environment variables must be defined in the .env file.\x1b[0m');
