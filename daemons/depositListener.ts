@@ -1,4 +1,5 @@
 import 'dotenv/config'; // Loads .env values
+import http from 'http';
 import mongoose from 'mongoose';
 import { TronWeb } from 'tronweb';
 import dbConnect from '../lib/db';
@@ -284,6 +285,17 @@ async function main() {
   
   // Start backup poller
   await startPollingLoop();
+  
+  // Start a dummy HTTP server for Render port binding (Free Tier Web Service workaround)
+  const PORT = process.env.PORT || 10000;
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ONLINE', service: 'Aegis Deposit Listener Daemon' }));
+  });
+  
+  server.listen(PORT, () => {
+    logEvent(`Dummy HTTP Health Check server listening on port ${PORT}`, 'info');
+  });
   
   await logEvent(`Safety monitoring loops fully armed. Listening for refills...`, 'success');
 }
