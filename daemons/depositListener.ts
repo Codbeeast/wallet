@@ -208,33 +208,41 @@ async function verifyTransaction(txHash: string) {
  */
 async function startRealtimeListener() {
   try {
-    await logEvent(`Initializing event subscription on USDT Contract: ${USDT_CONTRACT}`, 'info');
+    await logEvent(`Initializing event subscription on USDT Contract: ${USDT_CONTRACT} using TronWeb v6 event queries`, 'info');
     
-    // Load contract interface
-    const contract = await tronWeb.contract().at(USDT_CONTRACT);
-    
-    if (contract && typeof contract.Transfer === 'function') {
-      contract.Transfer().watch(async (err: any, eventResult: any) => {
-        if (err) {
-          console.error('Error in TRON event subscription:', err);
-          return;
+    // Periodically poll the event server only when we have active locks processing
+    setInterval(async () => {
+      try {
+        const activeLocks = await ReplenishmentLog.find({ status: 'PROCESSING' });
+        if (activeLocks.length === 0) {
+          return; // Skip querying the event server if no transactions are actively locking the system
         }
-        
-        if (eventResult && eventResult.transaction) {
-          const txHash = eventResult.transaction;
-          
-          // Check if this txHash matches a transaction we are actively PROCESSING
-          const matchingLog = await ReplenishmentLog.findOne({ txHash, status: 'PROCESSING' });
-          if (matchingLog) {
-            await logEvent(`[REALTIME] Intercepted Transfer event matching active txHash: ${txHash.slice(0, 10)}...`, 'info');
-            await verifyTransaction(txHash);
+
+        const events = await tronWeb.event.getEventsByContractAddress(USDT_CONTRACT, {
+          eventName: 'Transfer',
+          onlyConfirmed: true,
+          limit: 10,
+        });
+
+        if (events && Array.isArray(events)) {
+          for (const event of events) {
+            const txHash = event.transaction_id || event.transaction;
+            if (!txHash) continue;
+            
+            // Check if this txHash matches a transaction we are actively PROCESSING
+            const matchingLog = await ReplenishmentLog.findOne({ txHash, status: 'PROCESSING' });
+            if (matchingLog) {
+              await logEvent(`[REALTIME] Intercepted Transfer event matching active txHash: ${txHash.slice(0, 10)}...`, 'info');
+              await verifyTransaction(txHash);
+            }
           }
         }
-      });
-      await logEvent(`USDT contract Transfer event subscription active.`, 'info');
-    } else {
-      await logEvent(`Could not bind Event Watch: contract or Transfer method not available. Falling back to active poll.`, 'warn');
-    }
+      } catch (err: any) {
+        console.error('Error fetching events from TronWeb event API:', err);
+      }
+    }, 4000); // Check the event server every 4 seconds (Nile blocks finalization is ~3 seconds)
+    
+    await logEvent(`USDT contract Transfer event subscription active.`, 'info');
   } catch (error: any) {
     console.error('Failed to establish real-time event watcher:', error);
     await logEvent(`Real-time subscription connection error: ${error.message || error}. Running in polling mode.`, 'warn');
