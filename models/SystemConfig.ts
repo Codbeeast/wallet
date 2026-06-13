@@ -6,6 +6,7 @@ export interface ISystemConfig extends Document {
   lowFundsThreshold: number; // Stored in USDT (e.g. 15000.00)
   warmWalletAddress: string;
   usdtContractAddress: string;
+  coldTreasuryAddress: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -34,6 +35,11 @@ const SystemConfigSchema: Schema = new Schema(
       trim: true,
     },
     usdtContractAddress: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    coldTreasuryAddress: {
       type: String,
       required: true,
       trim: true,

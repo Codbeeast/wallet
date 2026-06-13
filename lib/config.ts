@@ -6,10 +6,11 @@ export async function getSystemConfig() {
   
   const warmWalletAddress = process.env.WARM_WALLET_ADDRESS;
   const usdtContractAddress = process.env.USDT_CONTRACT_ADDRESS;
+  const coldTreasuryAddress = process.env.COLD_TREASURY_ADDRESS;
 
-  if (!warmWalletAddress || !usdtContractAddress) {
+  if (!warmWalletAddress || !usdtContractAddress || !coldTreasuryAddress) {
     throw new Error(
-      'CRITICAL CONFIGURATION ERROR: WARM_WALLET_ADDRESS and USDT_CONTRACT_ADDRESS environment variables must be defined in the .env file.'
+      'CRITICAL CONFIGURATION ERROR: WARM_WALLET_ADDRESS, USDT_CONTRACT_ADDRESS, and COLD_TREASURY_ADDRESS environment variables must be defined in the .env file.'
     );
   }
 
@@ -23,6 +24,7 @@ export async function getSystemConfig() {
       lowFundsThreshold,
       warmWalletAddress,
       usdtContractAddress,
+      coldTreasuryAddress,
     });
   } else {
     // Keep database config updated if .env values change (removes need for hardcoded migration paths)
@@ -33,6 +35,10 @@ export async function getSystemConfig() {
     }
     if (config.usdtContractAddress !== usdtContractAddress) {
       config.usdtContractAddress = usdtContractAddress;
+      modified = true;
+    }
+    if (config.coldTreasuryAddress !== coldTreasuryAddress) {
+      config.coldTreasuryAddress = coldTreasuryAddress;
       modified = true;
     }
     if (modified) {

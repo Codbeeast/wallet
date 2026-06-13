@@ -39,6 +39,7 @@ export async function GET() {
         lowFundsThreshold: config.lowFundsThreshold,
         warmWalletAddress: config.warmWalletAddress,
         usdtContractAddress: config.usdtContractAddress,
+        coldTreasuryAddress: config.coldTreasuryAddress,
         warmWalletBalanceOnChain,
         isLowFunds,
         isLocked,

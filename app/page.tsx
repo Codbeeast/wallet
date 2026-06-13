@@ -33,6 +33,7 @@ export default function Dashboard() {
   const [lowFundsThreshold, setLowFundsThreshold] = useState<number>(15000.00);
   const [warmWalletAddress, setWarmWalletAddress] = useState<string>('');
   const [usdtContractAddress, setUsdtContractAddress] = useState<string>('');
+  const [coldTreasuryAddress, setColdTreasuryAddress] = useState<string>('');
   const [warmWalletBalanceOnChain, setWarmWalletBalanceOnChain] = useState<number>(0);
   const [isLowFunds, setIsLowFunds] = useState<boolean>(true);
   const [isLocked, setIsLocked] = useState<boolean>(false);
@@ -46,6 +47,12 @@ export default function Dashboard() {
   const [mode, setMode] = useState<'mock' | 'live'>('mock');
   const [amountInput, setAmountInput] = useState<string>('5000');
   const [txHashInput, setTxHashInput] = useState<string>(''); // For manual overrides
+
+  // Sweep states
+  const [sweepAmountInput, setSweepAmountInput] = useState<string>('2000');
+  const [sweepStep, setSweepStep] = useState<'idle' | 'authenticating' | 'loading_key' | 'signing' | 'broadcasting' | 'confirmed' | 'error'>('idle');
+  const [sweepStepMessage, setSweepStepMessage] = useState<string>('');
+  const [sweepTxHash, setSweepTxHash] = useState<string>('');
   
   // Transaction lifecycle stages
   // idle -> connecting -> usb_bridge -> ledger_review -> signing -> broadcasting -> db_lock -> daemon_check -> finished -> error
@@ -72,6 +79,7 @@ export default function Dashboard() {
         setLowFundsThreshold(json.data.lowFundsThreshold);
         setWarmWalletAddress(json.data.warmWalletAddress);
         setUsdtContractAddress(json.data.usdtContractAddress);
+        setColdTreasuryAddress(json.data.coldTreasuryAddress || '');
         setWarmWalletBalanceOnChain(json.data.warmWalletBalanceOnChain);
         setIsLowFunds(json.data.isLowFunds);
         setIsLocked(json.data.isLocked);
@@ -396,6 +404,124 @@ export default function Dashboard() {
     }
   };
 
+  // SWEEP / WITHDRAWAL WORKFLOW HANDLERS
+  const handleInitiateSweep = async () => {
+    const amt = parseFloat(sweepAmountInput);
+    if (isNaN(amt) || amt <= 0) {
+      alert('Please enter a valid positive sweep amount.');
+      return;
+    }
+    if (amt > platformBalance) {
+      alert(`Insufficient platform balance. You can only sweep up to $${platformBalance.toLocaleString()} USDT.`);
+      return;
+    }
+
+    setSweepTxHash('');
+    if (mode === 'live') {
+      await runLiveSweep(amt);
+    } else {
+      await runMockSweep(amt);
+    }
+  };
+
+  const runMockSweep = async (amount: number) => {
+    setSweepStep('authenticating');
+    setSweepStepMessage('Authenticating administrative credentials and verifying cold treasury status...');
+    
+    setTimeout(() => {
+      setSweepStep('loading_key');
+      setSweepStepMessage('Loading Warm Wallet private key from secure enclave...');
+      
+      setTimeout(() => {
+        setSweepStep('signing');
+        setSweepStepMessage('Signing Sweep payload using local ECDSA cryptographic core...');
+        
+        setTimeout(() => {
+          setSweepStep('broadcasting');
+          setSweepStepMessage('Relaying signed transaction to Nile Testnet node gateways...');
+          
+          setTimeout(async () => {
+            try {
+              const res = await fetch('/api/sweep', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  amount: amount,
+                  isMock: true
+                }),
+              });
+              const json = await res.json();
+              if (json.success) {
+                setSweepTxHash(json.data.txHash);
+                setSweepStep('confirmed');
+                setSweepStepMessage(`Sweep confirmed! ${amount} USDT has been moved to the Cold Treasury.`);
+                fetchStatus();
+                fetchDaemonLogs();
+              } else {
+                setSweepStep('error');
+                setSweepStepMessage(json.error || 'Failed to complete sweep execution.');
+              }
+            } catch (err: any) {
+              setSweepStep('error');
+              setSweepStepMessage(err.message || 'Network error encountered.');
+            }
+          }, 1200);
+        }, 1200);
+      }, 1000);
+    }, 800);
+  };
+
+  const runLiveSweep = async (amount: number) => {
+    setSweepStep('authenticating');
+    setSweepStepMessage('Authenticating credentials and loading API configuration...');
+    
+    setTimeout(async () => {
+      setSweepStep('loading_key');
+      setSweepStepMessage('Verifying server-side private key configuration...');
+      
+      setTimeout(async () => {
+        setSweepStep('signing');
+        setSweepStepMessage('Constructing contract invocation & signing locally...');
+        
+        setTimeout(async () => {
+          setSweepStep('broadcasting');
+          setSweepStepMessage('Broadcasting transaction to Nile Testnet RPC full nodes...');
+          
+          try {
+            const res = await fetch('/api/sweep', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                amount: amount,
+                isMock: false
+              }),
+            });
+            const json = await res.json();
+            if (json.success) {
+              setSweepTxHash(json.data.txHash);
+              setSweepStep('confirmed');
+              setSweepStepMessage(`Sweep Confirmed! Transaction broadcasted to Nile: ${json.data.txHash.slice(0, 10)}...`);
+              fetchStatus();
+              fetchDaemonLogs();
+            } else {
+              setSweepStep('error');
+              setSweepStepMessage(json.error || 'Failed to complete live sweep execution.');
+            }
+          } catch (err: any) {
+            setSweepStep('error');
+            setSweepStepMessage(err.message || 'Live network request failed.');
+          }
+        }, 1000);
+      }, 1000);
+    }, 800);
+  };
+
+  const handleResetSweep = () => {
+    setSweepStep('idle');
+    setSweepStepMessage('');
+    setSweepTxHash('');
+  };
+
   // Helper to format timestamps
   const formatTime = (timeStr: string) => {
     const date = new Date(timeStr);
@@ -657,6 +783,188 @@ export default function Dashboard() {
                 </div>
               </div>
             </div>
+
+            {/* SWEEP PORTAL / WITHDRAWAL CONSOLE */}
+            <div className="bg-zinc-950/40 border border-zinc-800/60 rounded-2xl p-6 shadow-xl backdrop-blur-md relative">
+              <h3 className="text-lg font-extrabold tracking-wide mb-4 flex items-center justify-between border-b border-zinc-900 pb-3">
+                <span>SWEEP PORTAL / WITHDRAWAL CONSOLE</span>
+                <span className="text-[10px] font-mono bg-indigo-950/50 border border-indigo-800/60 text-indigo-400 px-2 py-0.5 rounded animate-pulse">
+                  Warm-to-Cold
+                </span>
+              </h3>
+
+              {/* INPUT FIELDS */}
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-500">Source Address (Warm Wallet)</label>
+                  <div className="flex bg-[#0b0f19] border border-zinc-800 rounded-xl px-4 py-3 text-sm font-mono text-zinc-400">
+                    <span className="flex-1 select-all">{warmWalletAddress}</span>
+                    <span className="text-indigo-400 text-xs">Origin</span>
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-500">Destination Address (Cold Treasury)</label>
+                  <div className="flex bg-[#0b0f19] border border-zinc-800 rounded-xl px-4 py-3 text-sm font-mono text-zinc-300">
+                    <span className="flex-1 select-all">{coldTreasuryAddress}</span>
+                    <span className="text-teal-400 text-xs uppercase font-bold">Hardcoded Server Destination</span>
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-4 items-end mt-1">
+                  <div className="flex-1 flex flex-col gap-1.5 w-full">
+                    <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-500">USDT Sweep Amount</label>
+                    <div className="relative">
+                      <input 
+                        type="number"
+                        disabled={sweepStep !== 'idle'}
+                        value={sweepAmountInput}
+                        onChange={(e) => setSweepAmountInput(e.target.value)}
+                        placeholder="2,000"
+                        className="w-full bg-[#0b0f19] border border-zinc-800 focus:border-teal-500 focus:ring-1 focus:ring-teal-500/20 rounded-xl pl-4 pr-16 py-3 font-mono text-zinc-100 placeholder-zinc-700 outline-none transition-colors"
+                      />
+                      <span className="absolute right-4 top-1/2 -translate-y-1/2 text-zinc-500 font-mono text-xs">USDT</span>
+                    </div>
+                  </div>
+                  
+                  <button
+                    onClick={handleInitiateSweep}
+                    disabled={sweepStep !== 'idle' || !coldTreasuryAddress || !warmWalletAddress}
+                    className="w-full sm:w-auto px-6 py-3 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-500 hover:from-indigo-400 hover:to-purple-400 text-white font-extrabold tracking-wide uppercase transition-all duration-300 shadow-lg shadow-indigo-500/10 hover:shadow-indigo-400/20 disabled:from-zinc-900 disabled:to-zinc-900 disabled:border-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed text-sm flex items-center justify-center gap-2 h-[46px] cursor-pointer"
+                  >
+                    Initiate Sweep to Cold
+                  </button>
+                </div>
+              </div>
+
+              {/* SECURITY ASSURANCES */}
+              <div className="mt-6 border-t border-zinc-900 pt-5">
+                <p className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 mb-3">Sweep Security Policies</p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 font-mono text-[9px] text-zinc-400">
+                  <div className="px-2 py-1.5 rounded-lg bg-zinc-900/60 border border-zinc-800/80 flex flex-col gap-0.5">
+                    <span className="text-teal-400">Server-Side Signing</span>
+                    <span>Warm key never leaves server</span>
+                  </div>
+                  <div className="px-2 py-1.5 rounded-lg bg-zinc-900/60 border border-zinc-800/80 flex flex-col gap-0.5">
+                    <span className="text-indigo-400">Fixed Destination</span>
+                    <span>Cold address hardcoded in .env</span>
+                  </div>
+                  <div className="px-2 py-1.5 rounded-lg bg-zinc-900/60 border border-zinc-800/80 flex flex-col gap-0.5">
+                    <span className="text-purple-400">Balance Assertion</span>
+                    <span>Atomic balance checks applied</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* SWEEP PROGRESS PANEL */}
+            {sweepStep !== 'idle' && (
+              <div className="bg-zinc-950/40 border border-zinc-800/60 rounded-2xl p-6 shadow-xl backdrop-blur-md animate-fade-in">
+                <div className="flex items-center justify-between mb-4 border-b border-zinc-900 pb-3">
+                  <h3 className="text-sm font-bold text-zinc-300 uppercase tracking-widest font-mono">
+                    Sweep Execution Flow
+                  </h3>
+                  <button 
+                    onClick={handleResetSweep}
+                    className="px-2.5 py-1 text-[10px] font-mono text-zinc-400 hover:text-zinc-200 border border-zinc-800 rounded-md bg-zinc-900 hover:bg-zinc-850 cursor-pointer"
+                  >
+                    Reset Console
+                  </button>
+                </div>
+
+                <div className="flex flex-col gap-4 text-xs font-mono">
+                  {/* Step status display */}
+                  <div className="flex items-center gap-3 bg-zinc-900/40 border border-zinc-850 p-3.5 rounded-xl">
+                    <div className="relative flex h-3 w-3">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-3 w-3 bg-indigo-500"></span>
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-[10px] text-zinc-500 uppercase">Current Stage: {sweepStep.replace('_', ' ')}</p>
+                      <p className="text-zinc-200 text-xs mt-0.5">{sweepStepMessage}</p>
+                    </div>
+                  </div>
+
+                  {/* Flow pipeline visualization */}
+                  <div className="flex flex-col gap-3.5 mt-2">
+                    {/* Item 1: Authenticate */}
+                    <div className="flex items-center gap-3">
+                      <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                        ['idle', 'authenticating'].includes(sweepStep) ? 'bg-zinc-800 text-zinc-500' : 'bg-indigo-500 text-white'
+                      }`}>
+                        1
+                      </div>
+                      <span className={['idle', 'authenticating'].includes(sweepStep) ? 'text-zinc-500' : 'text-zinc-300'}>
+                        Administrative Authentication
+                      </span>
+                    </div>
+
+                    {/* Item 2: Secure Enclave Key Load */}
+                    <div className="flex items-center gap-3">
+                      <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                        ['idle', 'authenticating', 'loading_key'].includes(sweepStep) ? 'bg-zinc-800 text-zinc-500' : 'bg-indigo-500 text-white'
+                      }`}>
+                        2
+                      </div>
+                      <span className={['idle', 'authenticating', 'loading_key'].includes(sweepStep) ? 'text-zinc-500' : 'text-zinc-300'}>
+                        Secure Key Initialization
+                      </span>
+                    </div>
+
+                    {/* Item 3: Local Cryptographic Signing */}
+                    <div className="flex items-center gap-3">
+                      <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                        ['idle', 'authenticating', 'loading_key', 'signing'].includes(sweepStep) ? 'bg-zinc-800 text-zinc-500' : 'bg-indigo-500 text-white'
+                      }`}>
+                        3
+                      </div>
+                      <span className={['idle', 'authenticating', 'loading_key', 'signing'].includes(sweepStep) ? 'text-zinc-500' : 'text-zinc-300'}>
+                        ECDSA Private Key Signing
+                      </span>
+                    </div>
+
+                    {/* Item 4: Network Broadcast */}
+                    <div className="flex items-center gap-3">
+                      <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                        ['idle', 'authenticating', 'loading_key', 'signing', 'broadcasting'].includes(sweepStep) ? 'bg-zinc-800 text-zinc-500' : 'bg-indigo-500 text-white'
+                      }`}>
+                        4
+                      </div>
+                      <span className={['idle', 'authenticating', 'loading_key', 'signing', 'broadcasting'].includes(sweepStep) ? 'text-zinc-500' : 'text-zinc-300'}>
+                        Relaying Broadcast to Nile Testnet Gateway
+                      </span>
+                    </div>
+
+                    {/* Item 5: Confirmed */}
+                    <div className="flex items-center gap-3">
+                      <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                        sweepStep !== 'confirmed' ? 'bg-zinc-800 text-zinc-500' : 'bg-emerald-500 text-black'
+                      }`}>
+                        5
+                      </div>
+                      <span className={sweepStep !== 'confirmed' ? 'text-zinc-500' : 'text-emerald-400 font-bold'}>
+                        Sweep Settled & Balance Sheet Updated
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Transaction details link */}
+                  {sweepTxHash && (
+                    <div className="mt-4 pt-4 border-t border-zinc-900 text-[10px]">
+                      <span className="text-zinc-500">SWEEP TRANSACTION HASH:</span>{' '}
+                      <a 
+                        href={`https://nile.tronscan.org/#/transaction/${sweepTxHash}`} 
+                        target="_blank" 
+                        rel="noreferrer"
+                        className="text-indigo-400 hover:underline break-all font-mono"
+                      >
+                        {sweepTxHash}
+                      </a>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* TRANSACTION PIPELINE PROGRESS PANEL */}
             {step !== 'idle' && (
