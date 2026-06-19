@@ -115,21 +115,53 @@ export async function POST(request: Request) {
         
         const { r, s, v } = signingResult;
         
-        // Ensure signature components are formatted as valid padded hex strings
-        const cleanR = r.replace(/^0x/, '').padStart(64, '0');
-        const cleanS = s.replace(/^0x/, '').padStart(64, '0');
+        // Debug: log raw Turnkey response to diagnose signature assembly issues
+        console.log('[SWEEP DEBUG] Raw Turnkey signing result:', JSON.stringify({ r, s, v }));
+        await logSystemEvent(`Turnkey raw sig components - r(${r?.length} chars), s(${s?.length} chars), v: "${v}"`, 'info');
         
-        // Parse v (which can be decimal string like "27", "28", "0", "1") and format as a 2-char hex string
-        const cleanVVal = v.replace(/^0x/, '');
-        let vNum = parseInt(cleanVVal, 16);
-        if (isNaN(vNum) || ['27', '28', '0', '1'].includes(cleanVVal)) {
-          vNum = parseInt(cleanVVal, 10);
+        // Helper: normalize an ECDSA component to exactly 64 hex chars (32 bytes).
+        // - Strips 0x prefix
+        // - If the value is LONGER than 64 chars (e.g. 66 chars due to a leading 00 padding byte), 
+        //   strip leading zeros down to 64. This is the root cause of the "cannot fit in a buffer of 32 byte(s)" error.
+        // - If the value is SHORTER than 64 chars, pad with leading zeros.
+        function normalizeComponent(hex: string): string {
+          let clean = hex.replace(/^0x/, '');
+          // Strip leading zeros if longer than 64 chars
+          while (clean.length > 64 && clean.startsWith('0')) {
+            clean = clean.slice(1);
+          }
+          if (clean.length > 64) {
+            // If still too long after stripping leading zeros, take the last 64 chars
+            clean = clean.slice(clean.length - 64);
+          }
+          return clean.padStart(64, '0');
+        }
+        
+        const cleanR = normalizeComponent(r);
+        const cleanS = normalizeComponent(s);
+        
+        // Parse v: Turnkey returns v as a decimal string ("0", "1", "27", "28").
+        // TRON needs v as a hex byte: 27 → "1b", 28 → "1c", 0 → "1b", 1 → "1c"
+        const rawV = v?.replace(/^0x/, '') || '0';
+        let vNum = parseInt(rawV, 10);
+        if (isNaN(vNum)) {
+          // Fallback: try parsing as hex (e.g. if Turnkey returns "1b" or "1c" directly)
+          vNum = parseInt(rawV, 16);
+        }
+        // Normalize: if v is 0 or 1 (EIP-155 style), convert to 27/28
+        if (vNum === 0 || vNum === 1) {
+          vNum = vNum + 27;
         }
         const cleanV = vNum.toString(16).padStart(2, '0');
         
         const signatureHex = cleanR + cleanS + cleanV;
         
-        await logSystemEvent(`Turnkey KMS signature received. Assembling and broadcasting to Nile network...`, 'info');
+        // Validate: TRON expects exactly 65 bytes = 130 hex characters (32 + 32 + 1)
+        if (signatureHex.length !== 130) {
+          throw new Error(`Invalid signature length: expected 130 hex chars, got ${signatureHex.length}. r=${cleanR.length}, s=${cleanS.length}, v=${cleanV.length}`);
+        }
+        
+        await logSystemEvent(`Turnkey KMS signature received (sig: ${signatureHex.slice(0, 10)}...${signatureHex.slice(-6)}). Broadcasting to Nile network...`, 'info');
         
         // 4. Attach signature to transaction object
         (txObject as any).signature = [signatureHex];
