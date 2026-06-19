@@ -114,7 +114,20 @@ export async function POST(request: Request) {
         });
         
         const { r, s, v } = signingResult;
-        const signatureHex = r + s + v;
+        
+        // Ensure signature components are formatted as valid padded hex strings
+        const cleanR = r.replace(/^0x/, '').padStart(64, '0');
+        const cleanS = s.replace(/^0x/, '').padStart(64, '0');
+        
+        // Parse v (which can be decimal string like "27", "28", "0", "1") and format as a 2-char hex string
+        const cleanVVal = v.replace(/^0x/, '');
+        let vNum = parseInt(cleanVVal, 16);
+        if (isNaN(vNum) || ['27', '28', '0', '1'].includes(cleanVVal)) {
+          vNum = parseInt(cleanVVal, 10);
+        }
+        const cleanV = vNum.toString(16).padStart(2, '0');
+        
+        const signatureHex = cleanR + cleanS + cleanV;
         
         await logSystemEvent(`Turnkey KMS signature received. Assembling and broadcasting to Nile network...`, 'info');
         
