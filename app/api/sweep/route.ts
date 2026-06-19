@@ -75,63 +75,90 @@ export async function POST(request: Request) {
       });
       
       try {
-        await logSystemEvent(`Constructing smart contract transaction for Warm Wallet: ${config.warmWalletAddress}...`, 'info');
+        // ============================================================
+        // STEP 1: Construct the unsigned smart contract call
+        // ============================================================
+        await logSystemEvent(`[STEP 1] Constructing smart contract transaction for Warm Wallet: ${config.warmWalletAddress}...`, 'info');
         
-        // 1. Construct the unsigned smart contract call
-        const unsignedTx = await tronWeb.transactionBuilder.triggerSmartContract(
-          config.usdtContractAddress,      // USDT Contract address
-          'transfer(address,uint256)',     // Function ABI signature
-          {},                              // Options
-          [
-            { type: 'address', value: config.coldTreasuryAddress }, // Destination
-            { type: 'uint256', value: amountSun }                  // Amount scaled in Sun
-          ],
-          config.warmWalletAddress                                 // Origin/From address
-        );
+        let unsignedTx: any;
+        try {
+          unsignedTx = await tronWeb.transactionBuilder.triggerSmartContract(
+            config.usdtContractAddress,      // USDT Contract address
+            'transfer(address,uint256)',     // Function ABI signature
+            {},                              // Options
+            [
+              { type: 'address', value: config.coldTreasuryAddress }, // Destination
+              { type: 'uint256', value: amountSun }                  // Amount scaled in Sun
+            ],
+            config.warmWalletAddress                                 // Origin/From address
+          );
+        } catch (stepErr: any) {
+          throw new Error(`[FAILED AT STEP 1 - triggerSmartContract] ${stepErr.message || stepErr}`);
+        }
         
         const txObject = unsignedTx.transaction;
         const rawDataHex = txObject.raw_data_hex;
         
-        await logSystemEvent(`Requesting Turnkey KMS signature for payload...`, 'info');
+        await logSystemEvent(`[STEP 1 OK] Transaction constructed. raw_data_hex length: ${rawDataHex?.length}`, 'info');
         
-        // 2. Instantiate Turnkey SDK client
-        const turnkey = new Turnkey({
-          apiBaseUrl: turnkeyApiBaseUrl,
-          apiPrivateKey: turnkeyApiPrivateKey,
-          apiPublicKey: turnkeyApiPublicKey,
-          defaultOrganizationId: turnkeyOrganizationId,
-        });
+        // ============================================================
+        // STEP 2: Instantiate Turnkey SDK client
+        // ============================================================
+        await logSystemEvent(`[STEP 2] Instantiating Turnkey SDK client...`, 'info');
         
-        const turnkeyClient = turnkey.apiClient();
+        let turnkeyClient: any;
+        try {
+          const turnkey = new Turnkey({
+            apiBaseUrl: turnkeyApiBaseUrl,
+            apiPrivateKey: turnkeyApiPrivateKey,
+            apiPublicKey: turnkeyApiPublicKey,
+            defaultOrganizationId: turnkeyOrganizationId,
+          });
+          turnkeyClient = turnkey.apiClient();
+        } catch (stepErr: any) {
+          throw new Error(`[FAILED AT STEP 2 - Turnkey init] ${stepErr.message || stepErr}`);
+        }
         
-        // 3. Request Turnkey to sign the raw payload
-        const signingResult = await turnkeyClient.signRawPayload({
-          organizationId: turnkeyOrganizationId,
-          signWith: config.warmWalletAddress,
-          payload: rawDataHex,
-          encoding: 'PAYLOAD_ENCODING_HEXADECIMAL',
-          hashFunction: 'HASH_FUNCTION_SHA256',
-        });
+        await logSystemEvent(`[STEP 2 OK] Turnkey client instantiated.`, 'info');
+        
+        // ============================================================
+        // STEP 3: Request Turnkey to sign the raw payload
+        // ============================================================
+        await logSystemEvent(`[STEP 3] Requesting Turnkey KMS signature. signWith: ${config.warmWalletAddress}, payload length: ${rawDataHex?.length}`, 'info');
+        
+        let signingResult: any;
+        try {
+          signingResult = await turnkeyClient.signRawPayload({
+            organizationId: turnkeyOrganizationId,
+            signWith: config.warmWalletAddress,
+            payload: rawDataHex,
+            encoding: 'PAYLOAD_ENCODING_HEXADECIMAL',
+            hashFunction: 'HASH_FUNCTION_SHA256',
+          });
+        } catch (stepErr: any) {
+          throw new Error(`[FAILED AT STEP 3 - signRawPayload] ${stepErr.message || stepErr}`);
+        }
+        
+        // Debug: log the FULL signing result structure
+        console.log('[SWEEP DEBUG] Full signingResult keys:', Object.keys(signingResult || {}));
+        console.log('[SWEEP DEBUG] Full signingResult:', JSON.stringify(signingResult).slice(0, 500));
         
         const { r, s, v } = signingResult;
         
-        // Debug: log raw Turnkey response to diagnose signature assembly issues
-        console.log('[SWEEP DEBUG] Raw Turnkey signing result:', JSON.stringify({ r, s, v }));
-        await logSystemEvent(`Turnkey raw sig components - r(${r?.length} chars), s(${s?.length} chars), v: "${v}"`, 'info');
+        await logSystemEvent(`[STEP 3 OK] Turnkey signing done. r type=${typeof r}, length=${r?.length}. s type=${typeof s}, length=${s?.length}. v="${v}"`, 'info');
+        
+        // ============================================================
+        // STEP 4: Assemble signature
+        // ============================================================
+        await logSystemEvent(`[STEP 4] Assembling signature...`, 'info');
         
         // Helper: normalize an ECDSA component to exactly 64 hex chars (32 bytes).
-        // - Strips 0x prefix
-        // - If the value is LONGER than 64 chars (e.g. 66 chars due to a leading 00 padding byte), 
-        //   strip leading zeros down to 64. This is the root cause of the "cannot fit in a buffer of 32 byte(s)" error.
-        // - If the value is SHORTER than 64 chars, pad with leading zeros.
         function normalizeComponent(hex: string): string {
           let clean = hex.replace(/^0x/, '');
-          // Strip leading zeros if longer than 64 chars
           while (clean.length > 64 && clean.startsWith('0')) {
             clean = clean.slice(1);
           }
           if (clean.length > 64) {
-            // If still too long after stripping leading zeros, take the last 64 chars
             clean = clean.slice(clean.length - 64);
           }
           return clean.padStart(64, '0');
@@ -141,14 +168,12 @@ export async function POST(request: Request) {
         const cleanS = normalizeComponent(s);
         
         // Parse v: Turnkey returns v as a decimal string ("0", "1", "27", "28").
-        // TRON needs v as a hex byte: 27 → "1b", 28 → "1c", 0 → "1b", 1 → "1c"
+        // TRON needs v as hex: 27 → "1b", 28 → "1c", 0 → "1b", 1 → "1c"
         const rawV = v?.replace(/^0x/, '') || '0';
         let vNum = parseInt(rawV, 10);
         if (isNaN(vNum)) {
-          // Fallback: try parsing as hex (e.g. if Turnkey returns "1b" or "1c" directly)
           vNum = parseInt(rawV, 16);
         }
-        // Normalize: if v is 0 or 1 (EIP-155 style), convert to 27/28
         if (vNum === 0 || vNum === 1) {
           vNum = vNum + 27;
         }
@@ -156,27 +181,34 @@ export async function POST(request: Request) {
         
         const signatureHex = cleanR + cleanS + cleanV;
         
-        // Validate: TRON expects exactly 65 bytes = 130 hex characters (32 + 32 + 1)
+        await logSystemEvent(`[STEP 4 OK] Signature assembled. Length: ${signatureHex.length} chars. Expected: 130. Sig: ${signatureHex.slice(0, 10)}...${signatureHex.slice(-6)}`, 'info');
+        
         if (signatureHex.length !== 130) {
-          throw new Error(`Invalid signature length: expected 130 hex chars, got ${signatureHex.length}. r=${cleanR.length}, s=${cleanS.length}, v=${cleanV.length}`);
+          throw new Error(`[FAILED AT STEP 4] Invalid signature length: expected 130 hex chars, got ${signatureHex.length}. r=${cleanR.length}, s=${cleanS.length}, v=${cleanV.length}`);
         }
         
-        await logSystemEvent(`Turnkey KMS signature received (sig: ${signatureHex.slice(0, 10)}...${signatureHex.slice(-6)}). Broadcasting to Nile network...`, 'info');
+        // ============================================================
+        // STEP 5: Attach signature and broadcast
+        // ============================================================
+        await logSystemEvent(`[STEP 5] Attaching signature and broadcasting to Nile network...`, 'info');
         
-        // 4. Attach signature to transaction object
         (txObject as any).signature = [signatureHex];
         
-        // 5. Broadcast signed transaction to Nile Testnet RPC
-        const broadcastResult = await tronWeb.trx.sendRawTransaction(txObject as any);
+        let broadcastResult: any;
+        try {
+          broadcastResult = await tronWeb.trx.sendRawTransaction(txObject as any);
+        } catch (stepErr: any) {
+          throw new Error(`[FAILED AT STEP 5 - sendRawTransaction] ${stepErr.message || stepErr}`);
+        }
         
         if (!broadcastResult.result) {
           const rpcCode = broadcastResult.code || 'UNKNOWN_ERROR';
           const rpcMsg = broadcastResult.message ? String(broadcastResult.message) : '';
-          throw new Error(`RPC node broadcast rejected. Code: ${rpcCode}. Message: ${rpcMsg}`);
+          throw new Error(`[FAILED AT STEP 5 - RPC rejected] Code: ${rpcCode}. Message: ${rpcMsg}`);
         }
         
         txHash = broadcastResult.txid;
-        await logSystemEvent(`Broadcast successful. Nile txHash: ${txHash}`, 'success');
+        await logSystemEvent(`[STEP 5 OK] Broadcast successful. Nile txHash: ${txHash}`, 'success');
       } catch (err: any) {
         console.error('USDT sweep transaction failed:', err);
         await logSystemEvent(`On-chain broadcast failed: ${err.message || err}`, 'error');
