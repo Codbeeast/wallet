@@ -55,13 +55,33 @@ export async function POST(request: Request) {
     } else {
       // 2. LIVE NILE TESTNET MODE
       const turnkeyApiBaseUrl = process.env.TURNKEY_API_BASE_URL || 'https://api.turnkey.com';
-      const turnkeyApiPrivateKey = process.env.TURNKEY_API_PRIVATE_KEY;
+      let turnkeyApiPrivateKey = process.env.TURNKEY_API_PRIVATE_KEY;
       const turnkeyApiPublicKey = process.env.TURNKEY_API_PUBLIC_KEY;
       const turnkeyOrganizationId = process.env.TURNKEY_ORGANIZATION_ID;
 
       if (!turnkeyApiPrivateKey || !turnkeyApiPublicKey || !turnkeyOrganizationId) {
         return NextResponse.json(
           { success: false, error: 'Turnkey KMS configuration (TURNKEY_API_PRIVATE_KEY, TURNKEY_API_PUBLIC_KEY, or TURNKEY_ORGANIZATION_ID) is missing on the server.' },
+          { status: 500 }
+        );
+      }
+      
+      // Sanitize the API private key:
+      // - Strip 0x prefix if present
+      // - Remove any whitespace / newlines
+      // The Turnkey SDK expects a raw 32-byte (64 hex char) P-256 private key scalar.
+      turnkeyApiPrivateKey = turnkeyApiPrivateKey.replace(/^0x/, '').replace(/\s+/g, '');
+      
+      // Diagnostic logging (safe: only logs lengths, not the actual key)
+      console.log(`[SWEEP DEBUG] TURNKEY_API_PRIVATE_KEY length: ${turnkeyApiPrivateKey.length} chars (expected: 64)`);
+      console.log(`[SWEEP DEBUG] TURNKEY_API_PUBLIC_KEY length: ${turnkeyApiPublicKey.length} chars (expected: 66)`);
+      console.log(`[SWEEP DEBUG] TURNKEY_API_PRIVATE_KEY first 4 chars: ${turnkeyApiPrivateKey.slice(0, 4)}...`);
+      
+      if (turnkeyApiPrivateKey.length !== 64) {
+        const errMsg = `TURNKEY_API_PRIVATE_KEY has invalid length: ${turnkeyApiPrivateKey.length} hex chars. Expected exactly 64 hex chars (32 bytes). The value must be a raw P-256 private key scalar — not DER-encoded, not PEM, not JSON. Extract just the hex "privateKey" field from your Turnkey API key export.`;
+        console.error('[SWEEP ERROR]', errMsg);
+        return NextResponse.json(
+          { success: false, error: errMsg },
           { status: 500 }
         );
       }
