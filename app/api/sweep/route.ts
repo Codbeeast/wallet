@@ -69,8 +69,16 @@ export async function POST(request: Request) {
       // Sanitize the API private key:
       // - Strip 0x prefix if present
       // - Remove any whitespace / newlines
+      // - Strip leading 00 DER padding byte (common when key is exported from DER/ASN.1 format)
       // The Turnkey SDK expects a raw 32-byte (64 hex char) P-256 private key scalar.
       turnkeyApiPrivateKey = turnkeyApiPrivateKey.replace(/^0x/, '').replace(/\s+/g, '');
+      
+      // DER encoding adds a leading 0x00 byte when the key's high bit is set.
+      // This makes the key 33 bytes (66 hex chars) instead of 32 (64 hex chars). Strip it.
+      if (turnkeyApiPrivateKey.length === 66 && turnkeyApiPrivateKey.startsWith('00')) {
+        console.log('[SWEEP] Stripping leading 00 DER padding byte from TURNKEY_API_PRIVATE_KEY');
+        turnkeyApiPrivateKey = turnkeyApiPrivateKey.slice(2);
+      }
       
       // Diagnostic logging (safe: only logs lengths, not the actual key)
       console.log(`[SWEEP DEBUG] TURNKEY_API_PRIVATE_KEY length: ${turnkeyApiPrivateKey.length} chars (expected: 64)`);
