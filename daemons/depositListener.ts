@@ -1,4 +1,6 @@
-import 'dotenv/config'; // Loads .env values
+import dotenv from 'dotenv';
+dotenv.config({ path: '.env.local' });
+dotenv.config();
 import http from 'http';
 import mongoose from 'mongoose';
 import { TronWeb } from 'tronweb';

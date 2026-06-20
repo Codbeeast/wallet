@@ -7,11 +7,13 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "daemon": "tsx daemons/depositListener.ts"
+    "daemon": "tsx daemons/depositListener.ts",
+    "daemon:bsc": "tsx daemons/bscDepositListener.ts"
   },
   "dependencies": {
     "@turnkey/sdk-server": "^6.1.1",
     "dotenv": "^17.4.2",
+    "ethers": "^6.17.0",
     "mongoose": "^9.7.0",
     "next": "16.2.9",
     "react": "19.2.4",
