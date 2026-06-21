@@ -62,6 +62,12 @@ export default function BEP20Dashboard() {
   const [metamaskDetected, setMetamaskDetected] = useState<boolean>(false);
   const [metamaskConnected, setMetamaskConnected] = useState<boolean>(false);
 
+  // Diagnostics state
+  type DiagCheck = { ok: boolean; message: string; value?: string };
+  const [diagResults, setDiagResults] = useState<Record<string, DiagCheck> | null>(null);
+  const [diagLoading, setDiagLoading] = useState(false);
+  const [diagSummary, setDiagSummary] = useState<{ allPassed: boolean; failCount: number; totalChecks: number; status: string } | null>(null);
+
   const terminalContainerRef = useRef<HTMLDivElement>(null);
 
   // ─── Data Fetching ────────────────────────────────────────────────────────
@@ -154,23 +160,23 @@ export default function BEP20Dashboard() {
         throw new Error('No accounts returned from MetaMask.');
       }
 
-      // Switch to BSC Testnet (chainId 97 = 0x61)
+      // Switch to BSC Mainnet (chainId 56 = 0x38)
       try {
         await eth.request({
           method: 'wallet_switchEthereumChain',
-          params: [{ chainId: '0x61' }], // BSC Testnet
+          params: [{ chainId: '0x38' }], // BSC Mainnet
         });
       } catch (switchErr: any) {
-        // If BSC Testnet isn't added, add it
+        // If BSC Mainnet isn't added, add it
         if (switchErr.code === 4902) {
           await eth.request({
             method: 'wallet_addEthereumChain',
             params: [{
-              chainId: '0x61',
-              chainName: 'BSC Testnet',
+              chainId: '0x38',
+              chainName: 'BNB Smart Chain Mainnet',
               nativeCurrency: { name: 'BNB', symbol: 'BNB', decimals: 18 },
-              rpcUrls: ['https://data-seed-prebsc-1-s1.binance.org:8545/'],
-              blockExplorerUrls: ['https://testnet.bscscan.com'],
+              rpcUrls: ['https://bsc-dataseed.binance.org/'],
+              blockExplorerUrls: ['https://bscscan.com'],
             }],
           });
         }
@@ -935,6 +941,94 @@ export default function BEP20Dashboard() {
             )}
           </div>
 
+          {/* ── DIAGNOSTICS PANEL ── */}
+          <div className="bg-zinc-950/40 border border-zinc-800/60 rounded-2xl p-6 shadow-xl backdrop-blur-md">
+            <div className="flex items-center justify-between mb-4 border-b border-zinc-900 pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-zinc-200 uppercase tracking-widest font-mono">System Diagnostics</h3>
+                <p className="text-[10px] text-zinc-500 font-mono mt-0.5">Validates Turnkey KMS, BSC RPC & env configuration</p>
+              </div>
+              <button
+                onClick={async () => {
+                  setDiagLoading(true);
+                  setDiagResults(null);
+                  setDiagSummary(null);
+                  try {
+                    const res = await fetch('/api/bep20/diagnostics');
+                    const json = await res.json();
+                    setDiagResults(json.checks);
+                    setDiagSummary(json.summary);
+                  } catch (e: any) {
+                    setDiagResults({ 'fetch.error': { ok: false, message: e.message } });
+                  } finally {
+                    setDiagLoading(false);
+                  }
+                }}
+                disabled={diagLoading}
+                className="px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-bold text-xs uppercase tracking-wide transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+              >
+                {diagLoading ? 'Running...' : 'Run Diagnostics'}
+              </button>
+            </div>
+
+            {/* Summary badge */}
+            {diagSummary && (
+              <div className={`mb-4 px-4 py-3 rounded-xl border font-mono text-xs flex items-center gap-3 ${
+                diagSummary.allPassed
+                  ? 'bg-emerald-950/30 border-emerald-700/50 text-emerald-400'
+                  : 'bg-red-950/30 border-red-700/50 text-red-400'
+              }`}>
+                <span className="text-lg">{diagSummary.allPassed ? '✅' : '❌'}</span>
+                <div>
+                  <p className="font-bold">{diagSummary.status.replace(/_/g, ' ')}</p>
+                  <p className="text-[10px] opacity-70">{diagSummary.totalChecks} checks · {diagSummary.failCount} failed</p>
+                </div>
+              </div>
+            )}
+
+            {/* Check results */}
+            {diagResults && (
+              <div className="flex flex-col gap-2 font-mono text-[11px]">
+                {Object.entries(diagResults).map(([key, check]) => (
+                  <div
+                    key={key}
+                    className={`flex items-start gap-3 p-3 rounded-lg border ${
+                      check.ok
+                        ? 'bg-emerald-950/20 border-emerald-900/50'
+                        : 'bg-red-950/20 border-red-900/50'
+                    }`}
+                  >
+                    <span className="mt-0.5 shrink-0">{check.ok ? '✅' : '❌'}</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-zinc-400 text-[10px] uppercase tracking-wider">{key}</p>
+                      <p className={`mt-0.5 break-words ${check.ok ? 'text-emerald-300' : 'text-red-300'}`}>
+                        {check.message}
+                      </p>
+                      {check.value && (
+                        <p className="text-zinc-500 text-[10px] mt-1 truncate" title={check.value}>
+                          {check.value}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {!diagResults && !diagLoading && (
+              <p className="text-zinc-600 font-mono text-xs text-center py-6">
+                Click &quot;Run Diagnostics&quot; to verify your full BSC + Turnkey setup.
+              </p>
+            )}
+
+            {diagLoading && (
+              <div className="flex items-center justify-center gap-3 py-8 text-zinc-400 font-mono text-xs">
+                <span className="animate-spin text-amber-400 text-lg">⟳</span>
+                Contacting Turnkey API and BSC RPC...
+              </div>
+            )}
+          </div>
+
           {/* RIGHT: BSC INFO PANEL */}
           <div className="lg:col-span-5 flex flex-col gap-6">
 
@@ -955,7 +1049,7 @@ export default function BEP20Dashboard() {
                     </div>
                     <div>
                       <p className="text-amber-400 font-bold text-xs">BNB Smart Chain</p>
-                      <p className="text-zinc-500 text-[10px]">Chain ID: 97 (Testnet)</p>
+                      <p className="text-zinc-500 text-[10px]">Chain ID: 56 (Mainnet)</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5">
