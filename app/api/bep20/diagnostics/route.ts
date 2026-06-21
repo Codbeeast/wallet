@@ -152,13 +152,13 @@ export async function GET() {
   // ─── 6. TURNKEY vs WARM WALLET MATCH CHECK ────────────────────────────────
   const turnkeyBscAddr = (process.env.TURNKEY_BSC_WARM_WALLET_ADDRESS ?? '').toLowerCase();
   const bscWarmAddr    = (process.env.BSC_WARM_WALLET_ADDRESS ?? '').toLowerCase();
-  const areSameAddress = turnkeyBscAddr && bscWarmAddr && turnkeyBscAddr === bscWarmAddr;
+  const areSameAddress = !!(turnkeyBscAddr && bscWarmAddr && turnkeyBscAddr === bscWarmAddr);
 
   results['bsc.warmVsTurnkeyMatch'] = {
-    ok: !areSameAddress,
+    ok: areSameAddress,
     message: areSameAddress
-      ? 'WARNING: BSC_WARM_WALLET_ADDRESS and TURNKEY_BSC_WARM_WALLET_ADDRESS are the same address. They should be different wallets.'
-      : 'Correct — warm wallet (MetaMask) and Turnkey KMS address are distinct',
+      ? 'Correct — BSC_WARM_WALLET_ADDRESS matches TURNKEY_BSC_WARM_WALLET_ADDRESS'
+      : 'ERROR: BSC_WARM_WALLET_ADDRESS must match TURNKEY_BSC_WARM_WALLET_ADDRESS so Turnkey can sign sweeps from the warm wallet',
   };
 
   // ─── Summary ──────────────────────────────────────────────────────────────
