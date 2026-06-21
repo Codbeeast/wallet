@@ -132,7 +132,6 @@ export async function POST(request: Request) {
 
         const unsignedTx: ethers.TransactionLike = {
           to: config.usdtContractAddress,
-          from: config.warmWalletAddress,
           nonce,
           gasLimit,
           gasPrice,
